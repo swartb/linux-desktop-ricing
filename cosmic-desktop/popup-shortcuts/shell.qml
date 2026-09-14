@@ -8,20 +8,72 @@ ShellRoot {
     id: root
 
     property var shortcuts: []
+    property int selectedIndex: 0
 
-    function matches(item) {
+    property var filteredShortcuts: {
         const q = search.text.toLowerCase().trim()
 
-        return q === ""
-            || item.shortcut.toLowerCase().includes(q)
-            || item.description.toLowerCase().includes(q)
-            || item.category.toLowerCase().includes(q)
+        return root.shortcuts.filter(function(item) {
+            return q === ""
+                || item.shortcut.toLowerCase().includes(q)
+                || item.description.toLowerCase().includes(q)
+                || item.category.toLowerCase().includes(q)
+        })
     }
 
-    function matchingCount() {
-        return root.shortcuts.filter(function(item) {
-            return root.matches(item)
-        }).length
+    function moveSelection(delta) {
+        if (root.filteredShortcuts.length === 0)
+            return
+
+        root.selectedIndex = Math.max(
+            0,
+            Math.min(
+                root.filteredShortcuts.length - 1,
+                root.selectedIndex + delta
+            )
+        )
+
+        Qt.callLater(root.ensureSelectionVisible)
+    }
+
+    function ensureSelectionVisible() {
+        const item = listRepeater.itemAt(root.selectedIndex)
+        if (!item)
+            return
+
+        const top = item.y
+        const bottom = item.y + item.height
+        const viewTop = scroller.contentY
+        const viewBottom = viewTop + scroller.height
+
+        if (top < viewTop) {
+            scroller.contentY = Math.max(0, top)
+        } else if (bottom > viewBottom) {
+            scroller.contentY = Math.max(
+                0,
+                Math.min(
+                    scroller.contentHeight - scroller.height,
+                    bottom - scroller.height
+                )
+            )
+        }
+    }
+
+    function executeSelected() {
+        if (root.filteredShortcuts.length === 0)
+            return
+
+        const item = root.filteredShortcuts[root.selectedIndex]
+
+        shortcutRunner.command = [
+            "/usr/bin/python3",
+            "/home/bart/.config/quickshell-shortcuts/shortcuts.py",
+            "--run",
+            item.shortcut
+        ]
+
+        shortcutRunner.launched = true
+        shortcutRunner.running = true
     }
 
     Process {
@@ -35,10 +87,21 @@ ShellRoot {
             onStreamFinished: {
                 try {
                     root.shortcuts = JSON.parse(this.text)
+                    root.selectedIndex = 0
                 } catch (e) {
                     console.log("JSON ERROR:", e)
                 }
             }
+        }
+    }
+
+    Process {
+        id: shortcutRunner
+        property bool launched: false
+
+        onRunningChanged: {
+            if (launched && !running)
+                Qt.quit()
         }
     }
 
@@ -167,7 +230,30 @@ ShellRoot {
                             color: "#eeeeee"
                             font.pixelSize: 16
                             background: Item {}
-                            Keys.onEscapePressed: Qt.quit()
+
+                            onTextChanged: {
+                                root.selectedIndex = 0
+                                Qt.callLater(root.ensureSelectionVisible)
+                            }
+
+                            Keys.onPressed: function(event) {
+                                if (event.key === Qt.Key_Down) {
+                                    root.moveSelection(1)
+                                    event.accepted = true
+                                } else if (event.key === Qt.Key_Up) {
+                                    root.moveSelection(-1)
+                                    event.accepted = true
+                                } else if (
+                                    event.key === Qt.Key_Return
+                                    || event.key === Qt.Key_Enter
+                                ) {
+                                    root.executeSelected()
+                                    event.accepted = true
+                                } else if (event.key === Qt.Key_Escape) {
+                                    Qt.quit()
+                                    event.accepted = true
+                                }
+                            }
                         }
                     }
                 }
@@ -190,7 +276,7 @@ ShellRoot {
                     }
 
                     Text {
-                        text: root.matchingCount() + " shortcuts"
+                        text: root.filteredShortcuts.length + " shortcuts"
                         color: "#666666"
                         font.pixelSize: 12
                     }
@@ -214,30 +300,18 @@ ShellRoot {
                         spacing: 3
 
                         Repeater {
-                            model: root.shortcuts
+                            id: listRepeater
+                            model: root.filteredShortcuts
 
                             delegate: Column {
                                 required property var modelData
                                 required property int index
 
-                                property bool itemMatches: root.matches(modelData)
-
-                                property bool showCategory: {
-                                    if (!itemMatches)
-                                        return false
-
-                                    for (let i = index - 1; i >= 0; i--) {
-                                        if (root.matches(root.shortcuts[i])) {
-                                            return root.shortcuts[i].category
-                                                !== modelData.category
-                                        }
-                                    }
-
-                                    return true
-                                }
+                                property bool showCategory: index === 0
+                                    || root.filteredShortcuts[index - 1].category
+                                        !== modelData.category
 
                                 width: listColumn.width
-                                visible: itemMatches
                                 spacing: 4
 
                                 Text {
@@ -256,9 +330,13 @@ ShellRoot {
                                     width: listColumn.width
                                     height: 50
                                     radius: 10
-                                    color: mouseArea.containsMouse
-                                        ? "#242424"
-                                        : "transparent"
+                                    color: index === root.selectedIndex
+                                        ? "#323232"
+                                        : mouseArea.containsMouse
+                                            ? "#242424"
+                                            : "transparent"
+                                    border.width: index === root.selectedIndex ? 1 : 0
+                                    border.color: "#555555"
 
                                     Behavior on color {
                                         ColorAnimation {
@@ -270,6 +348,11 @@ ShellRoot {
                                         id: mouseArea
                                         anchors.fill: parent
                                         hoverEnabled: true
+
+                                        onClicked: {
+                                            root.selectedIndex = index
+                                            root.executeSelected()
+                                        }
                                     }
 
                                     RowLayout {
@@ -330,7 +413,7 @@ ShellRoot {
                     Layout.fillWidth: true
 
                     Text {
-                        text: "Type to filter"
+                        text: "↑ ↓ Navigate   •   Enter Run   •   Esc Close"
                         color: "#666666"
                         font.pixelSize: 11
                     }
