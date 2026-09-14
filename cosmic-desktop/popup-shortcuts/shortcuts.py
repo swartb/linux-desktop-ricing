@@ -164,36 +164,75 @@ def wtype_command(shortcut):
     if not wtype:
         raise RuntimeError("wtype is required to execute shortcuts")
 
-    parts = [part.strip() for part in shortcut.split(" + ") if part.strip()]
-    if not parts:
+    shortcut = shortcut.strip()
+    if not shortcut:
         raise ValueError("empty shortcut")
+
+    # Keep a literal trailing '+' as the key (also accept Ctrl++).
+    if shortcut == "+":
+        parts = ["plus"]
+    elif re.search(r"\+\s*\+$", shortcut):
+        parts = re.split(r"\s*\+\s*", shortcut[:-1].rstrip())[:-1] + ["plus"]
+    else:
+        parts = re.split(r"\s*\+\s*", shortcut)
+    if any(not part for part in parts):
+        raise ValueError(f"invalid shortcut: {shortcut}")
 
     modifier_names = {
         "super": "logo",
         "logo": "logo",
         "win": "logo",
+        "meta": "logo",
+        "mod4": "logo",
         "ctrl": "ctrl",
         "control": "ctrl",
         "shift": "shift",
         "alt": "alt",
+        "mod1": "alt",
         "altgr": "altgr",
+        "isolevel3shift": "altgr",
         "capslock": "capslock",
     }
 
     key_names = {
-        "Enter": "Return",
-        "Space": "space",
-        "Esc": "Escape",
+        "enter": "Return", "return": "Return", "space": "space",
+        "spacebar": "space", "esc": "Escape", "escape": "Escape",
+        "tab": "Tab", "backtab": "ISO_Left_Tab", "backspace": "BackSpace",
+        "delete": "Delete", "del": "Delete", "insert": "Insert", "ins": "Insert",
+        "home": "Home", "end": "End", "left": "Left", "right": "Right",
+        "up": "Up", "down": "Down", "pageup": "Page_Up", "pgup": "Page_Up",
+        "pagedown": "Page_Down", "pgdn": "Page_Down", "pgdown": "Page_Down",
+        "printscreen": "Print", "prtsc": "Print", "print": "Print",
+        "pause": "Pause", "menu": "Menu", "capslock": "Caps_Lock",
+        "numlock": "Num_Lock", "scrolllock": "Scroll_Lock",
     }
+    punctuation = dict(zip(
+        "`~!@#$%^&*()-_=+[]{}\\|;:'\",<.>/?",
+        ("grave asciitilde exclam at numbersign dollar percent asciicircum "
+         "ampersand asterisk parenleft parenright minus underscore equal plus "
+         "bracketleft bracketright braceleft braceright backslash bar semicolon "
+         "colon apostrophe quotedbl comma less period greater slash question").split(),
+    ))
 
     modifiers = []
     for modifier in parts[:-1]:
-        mapped = modifier_names.get(modifier.lower())
+        mapped = modifier_names.get(re.sub(r"[\s_-]", "", modifier.lower()))
         if not mapped:
             raise ValueError(f"unsupported modifier: {modifier}")
-        modifiers.append(mapped)
+        if mapped not in modifiers:
+            modifiers.append(mapped)
 
-    key = key_names.get(parts[-1], parts[-1])
+    raw_key = parts[-1]
+    alias = re.sub(r"[\s_-]", "", raw_key.lower())
+    key = key_names.get(alias, punctuation.get(raw_key, raw_key))
+    if re.fullmatch(r"[A-Za-z]", key):
+        # Shift is carried by the modifier, not by an uppercase keysym.
+        key = key.lower()
+    elif re.fullmatch(r"f(?:[1-9]|[12][0-9]|3[0-5])", key, re.I):
+        key = key.upper()
+    # Other XKB names (e.g. XF86AudioMute and KP_Enter) pass through to wtype.
+    if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+        raise ValueError(f"unsupported key: {raw_key}")
 
     command = [wtype]
     for modifier in modifiers:
