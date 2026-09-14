@@ -68,20 +68,20 @@ x = C-x
 EOF
 cat > "$stage/app.conf" <<'EOF'
 [com-system76-cosmicterm]
-super.c = C-S-c
-super.v = C-S-v
+meta.c = C-S-c
+meta.v = C-S-v
 
 [kitty]
-super.c = C-S-c
-super.v = C-S-v
+meta.c = C-S-c
+meta.v = C-S-v
 
 [foot]
-super.c = C-S-c
-super.v = C-S-v
+meta.c = C-S-c
+meta.v = C-S-v
 
 [alacritty]
-super.c = C-S-c
-super.v = C-S-v
+meta.c = C-S-c
+meta.v = C-S-v
 EOF
 cat > "$stage/mapper.service" <<'EOF'
 [Unit]
