@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 
-import re
 import json
+import re
+import shlex
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 DEFAULTS = Path("/usr/share/cosmic/com.system76.CosmicSettings.Shortcuts/v1/defaults")
@@ -155,45 +159,128 @@ def combo_id(item):
     return tuple(item["modifiers"]), item["key"]
 
 
-merged = {}
+def wtype_command(shortcut):
+    wtype = shutil.which("wtype")
+    if not wtype:
+        raise RuntimeError("wtype is required to execute shortcuts")
 
-for item in parse_file(DEFAULTS):
-    merged[combo_id(item)] = item
+    parts = [part.strip() for part in shortcut.split(" + ") if part.strip()]
+    if not parts:
+        raise ValueError("empty shortcut")
 
-for item in parse_file(CUSTOM):
-    combo = combo_id(item)
-    if item["action"] == "Disable":
-        merged.pop(combo, None)
-    else:
-        merged[combo] = item
+    modifier_names = {
+        "super": "logo",
+        "logo": "logo",
+        "win": "logo",
+        "ctrl": "ctrl",
+        "control": "ctrl",
+        "shift": "shift",
+        "alt": "alt",
+        "altgr": "altgr",
+        "capslock": "capslock",
+    }
 
-output = []
+    key_names = {
+        "Enter": "Return",
+        "Space": "space",
+        "Esc": "Escape",
+    }
 
-for item in merged.values():
-    description = item["description"] or pretty_action(item["action"])
-    output.append({
-        "shortcut": " + ".join(item["modifiers"] + [item["key"]]),
-        "description": description,
-        "action": item["action"],
-        "category": category_for(item["action"], description),
-    })
+    modifiers = []
+    for modifier in parts[:-1]:
+        mapped = modifier_names.get(modifier.lower())
+        if not mapped:
+            raise ValueError(f"unsupported modifier: {modifier}")
+        modifiers.append(mapped)
 
-category_order = {
-    "Window Management": 0,
-    "Workspaces": 1,
-    "Applications": 2,
-    "Displays": 3,
-    "Screenshots": 4,
-    "System": 5,
-    "Other": 6,
-}
+    key = key_names.get(parts[-1], parts[-1])
 
-output.sort(
-    key=lambda x: (
-        category_order.get(x["category"], 99),
-        x["description"].lower(),
-        x["shortcut"].lower(),
+    command = [wtype]
+    for modifier in modifiers:
+        command += ["-M", modifier]
+
+    command += ["-k", key]
+
+    for modifier in reversed(modifiers):
+        command += ["-m", modifier]
+
+    return command
+
+
+def run_shortcut(shortcut):
+    try:
+        command = wtype_command(shortcut)
+    except (RuntimeError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    # The overlay still owns keyboard focus while this process is started.
+    # Run wtype detached after a short delay so QuickShell can close first.
+    delayed_command = "sleep 0.15; exec " + shlex.join(command)
+
+    subprocess.Popen(
+        ["/bin/sh", "-c", delayed_command],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
-)
 
-print(json.dumps(output, ensure_ascii=False, indent=2))
+    return 0
+
+
+def build_output():
+    merged = {}
+
+    for item in parse_file(DEFAULTS):
+        merged[combo_id(item)] = item
+
+    for item in parse_file(CUSTOM):
+        combo = combo_id(item)
+        if item["action"] == "Disable":
+            merged.pop(combo, None)
+        else:
+            merged[combo] = item
+
+    output = []
+
+    for item in merged.values():
+        description = item["description"] or pretty_action(item["action"])
+        output.append({
+            "shortcut": " + ".join(item["modifiers"] + [item["key"]]),
+            "description": description,
+            "action": item["action"],
+            "category": category_for(item["action"], description),
+        })
+
+    category_order = {
+        "Window Management": 0,
+        "Workspaces": 1,
+        "Applications": 2,
+        "Displays": 3,
+        "Screenshots": 4,
+        "System": 5,
+        "Other": 6,
+    }
+
+    output.sort(
+        key=lambda x: (
+            category_order.get(x["category"], 99),
+            x["description"].lower(),
+            x["shortcut"].lower(),
+        )
+    )
+
+    return output
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--run":
+        return run_shortcut(sys.argv[2])
+
+    print(json.dumps(build_output(), ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
